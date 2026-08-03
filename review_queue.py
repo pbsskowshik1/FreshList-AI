@@ -26,7 +26,6 @@ from rich.text import Text
 from rich.columns import Columns
 from rich.rule import Rule
 
-# ── Auth ────────────────────────────────────────────────────────────────────
 CLIENT_ID     = os.environ.get("SPOTIPY_CLIENT_ID",     "YOUR_CLIENT_ID_HERE")
 CLIENT_SECRET = os.environ.get("SPOTIPY_CLIENT_SECRET", "YOUR_CLIENT_SECRET_HERE")
 REDIRECT_URI  = os.environ.get("SPOTIPY_REDIRECT_URI",  "http://127.0.0.1:8888/callback")
@@ -44,7 +43,6 @@ REMOVE_ALL_OCCURRENCES_IN_PLAYLIST = True
 console = Console()
 
 
-# ── Spotify client ───────────────────────────────────────────────────────────
 def get_spotify_client() -> spotipy.Spotify:
     auth_manager = SpotifyOAuth(
         client_id=CLIENT_ID,
@@ -57,7 +55,6 @@ def get_spotify_client() -> spotipy.Spotify:
     return spotipy.Spotify(auth_manager=auth_manager)
 
 
-# ── Pending removals helpers ─────────────────────────────────────────────────
 def load_pending() -> list[dict]:
     if not os.path.exists(PENDING_FILE):
         return []
@@ -90,7 +87,6 @@ def remove_track(sp: spotipy.Spotify, playlist_id: str, track_uri: str) -> bool:
         return False
 
 
-# ── Fetch ALL user playlists (handles pagination) ────────────────────────────
 def fetch_all_playlists(sp: spotipy.Spotify) -> list[dict]:
     all_playlists: list[dict] = []
     response = sp.current_user_playlists(limit=50)
@@ -100,10 +96,8 @@ def fetch_all_playlists(sp: spotipy.Spotify) -> list[dict]:
     return all_playlists
 
 
-# ── Review pending removals ──────────────────────────────────────────────────
 def review_pending_removals(sp: spotipy.Spotify) -> None:
     entries = load_pending()
-
     console.print(Rule("[bold green]Pending Removal Queue[/]"))
 
     if not entries:
@@ -150,7 +144,7 @@ def review_pending_removals(sp: spotipy.Spotify) -> None:
             remaining.append(e)
             remaining.extend(entries[i:])
             break
-        else:  # "s"
+        else:
             console.print("    [dim]Skipped — still in queue.[/]\n")
             remaining.append(e)
 
@@ -161,10 +155,8 @@ def review_pending_removals(sp: spotipy.Spotify) -> None:
     )
 
 
-# ── Add new songs ────────────────────────────────────────────────────────────
 def add_new_songs(sp: spotipy.Spotify) -> None:
     console.print(Rule("[bold green]Add Songs to a Playlist[/]"))
-
     console.print("[dim]Fetching all your playlists…[/]")
     playlists = fetch_all_playlists(sp)
 
@@ -172,32 +164,18 @@ def add_new_songs(sp: spotipy.Spotify) -> None:
         console.print("[red]No editable playlists found.[/]")
         return
 
-    pl_table = Table(
-        box=box.ROUNDED,
-        show_header=True,
-        header_style="bold cyan",
-        title="Your Playlists",
-        title_style="bold",
-    )
+    pl_table = Table(box=box.ROUNDED, show_header=True, header_style="bold cyan", title="Your Playlists", title_style="bold")
     pl_table.add_column("#", style="dim", width=4, justify="right")
     pl_table.add_column("Playlist Name", style="bold white")
     pl_table.add_column("Tracks", justify="right", style="green")
     pl_table.add_column("Owner", style="dim")
 
     for idx, pl in enumerate(playlists, 1):
-        pl_table.add_row(
-            str(idx),
-            pl["name"],
-            str(pl.get("tracks", {}).get("total", "?")),
-            pl["owner"]["display_name"],
-        )
+        pl_table.add_row(str(idx), pl["name"], str(pl.get("tracks", {}).get("total", "?")), pl["owner"]["display_name"])
 
     console.print(pl_table)
 
-    pl_input = Prompt.ask(
-        "\nSelect playlist number (or [bold]q[/] to skip)"
-    ).strip()
-
+    pl_input = Prompt.ask("\nSelect playlist number (or [bold]q[/] to skip)").strip()
     if pl_input.lower() == "q" or not pl_input.isdigit():
         return
 
@@ -207,17 +185,10 @@ def add_new_songs(sp: spotipy.Spotify) -> None:
         return
 
     selected_pl = playlists[idx]
-    console.print(
-        f"\n[bold green]Selected:[/] {selected_pl['name']} "
-        f"([dim]{selected_pl['tracks']['total']} tracks[/])\n"
-    )
+    console.print(f"\n[bold green]Selected:[/] {selected_pl['name']} ([dim]{selected_pl['tracks']['total']} tracks[/])\n")
 
     while True:
-        query = Prompt.ask(
-            f"Search a song to add to [bold]{selected_pl['name']}[/] "
-            "(or press [bold]Enter[/] to finish)"
-        ).strip()
-
+        query = Prompt.ask(f"Search a song to add to [bold]{selected_pl['name']}[/] (or press [bold]Enter[/] to finish)").strip()
         if not query:
             break
 
@@ -228,11 +199,7 @@ def add_new_songs(sp: spotipy.Spotify) -> None:
             console.print("[yellow]No tracks found.[/]\n")
             continue
 
-        result_table = Table(
-            box=box.SIMPLE_HEAD,
-            show_header=True,
-            header_style="bold magenta",
-        )
+        result_table = Table(box=box.SIMPLE_HEAD, show_header=True, header_style="bold magenta")
         result_table.add_column("#", style="dim", width=3, justify="right")
         result_table.add_column("Title", style="bold white")
         result_table.add_column("Artists", style="cyan")
@@ -245,21 +212,11 @@ def add_new_songs(sp: spotipy.Spotify) -> None:
             year = track["album"]["release_date"][:4]
             ms = track["duration_ms"]
             duration = f"{ms // 60000}:{(ms % 60000) // 1000:02d}"
-            result_table.add_row(
-                str(i),
-                track["name"],
-                artists,
-                track["album"]["name"],
-                year,
-                duration,
-            )
+            result_table.add_row(str(i), track["name"], artists, track["album"]["name"], year, duration)
 
         console.print(result_table)
 
-        track_input = Prompt.ask(
-            "Select track number to add (or [bold]c[/] to cancel)"
-        ).strip()
-
+        track_input = Prompt.ask("Select track number to add (or [bold]c[/] to cancel)").strip()
         if track_input.lower() == "c":
             console.print("[dim]Cancelled.[/]\n")
             continue
@@ -267,15 +224,11 @@ def add_new_songs(sp: spotipy.Spotify) -> None:
         if track_input.isdigit() and 1 <= int(track_input) <= len(results):
             chosen = results[int(track_input) - 1]
             artists = ", ".join(a["name"] for a in chosen["artists"])
-
             add_to_another = True
             target_playlists = [selected_pl]
 
             while add_to_another:
-                add_to_another = Confirm.ask(
-                    f"Also add '[bold]{chosen['name']}[/]' to [bold]another[/] playlist?",
-                    default=False,
-                )
+                add_to_another = Confirm.ask(f"Also add '[bold]{chosen['name']}[/]' to [bold]another[/] playlist?", default=False)
                 if add_to_another:
                     console.print(pl_table)
                     extra_input = Prompt.ask("Select another playlist number (or [bold]q[/] to skip)").strip()
@@ -289,10 +242,7 @@ def add_new_songs(sp: spotipy.Spotify) -> None:
             for pl in target_playlists:
                 try:
                     sp.playlist_add_items(pl["id"], [chosen["uri"]])
-                    console.print(
-                        f"  [bold green]✓[/] Added [bold]{chosen['name']}[/] "
-                        f"by {artists} → [green]{pl['name']}[/]"
-                    )
+                    console.print(f"  [bold green]✓[/] Added [bold]{chosen['name']}[/] by {artists} → [green]{pl['name']}[/]")
                 except spotipy.exceptions.SpotifyException as exc:
                     console.print(f"  [bold red]✗ Failed adding to {pl['name']}:[/] {exc}")
             console.print()
@@ -300,17 +250,9 @@ def add_new_songs(sp: spotipy.Spotify) -> None:
             console.print("[yellow]Invalid choice.[/]\n")
 
 
-# ── Main menu ────────────────────────────────────────────────────────────────
 def main_menu(sp: spotipy.Spotify) -> None:
     me = sp.me()
-    console.print(
-        Panel(
-            f"[bold green]Spotify Playlist Manager[/]\n"
-            f"[dim]Logged in as[/] [bold]{me['display_name']}[/]",
-            border_style="green",
-            expand=False,
-        )
-    )
+    console.print(Panel(f"[bold green]Spotify Playlist Manager[/]\n[dim]Logged in as[/] [bold]{me['display_name']}[/]", border_style="green", expand=False))
 
     while True:
         console.print(Rule())
@@ -332,17 +274,7 @@ def main_menu(sp: spotipy.Spotify) -> None:
 
 def main() -> None:
     if "YOUR_CLIENT_ID_HERE" in CLIENT_ID or "YOUR_CLIENT_SECRET_HERE" in CLIENT_SECRET:
-        console.print(
-            Panel(
-                "[bold red]Spotify credentials not set![/]\n\n"
-                "Set the following environment variables before running:\n\n"
-                "  [green]SPOTIPY_CLIENT_ID[/]      — your Spotify app client ID\n"
-                "  [green]SPOTIPY_CLIENT_SECRET[/]  — your Spotify app client secret\n"
-                "  [green]SPOTIPY_REDIRECT_URI[/]   — e.g. http://127.0.0.1:8888/callback",
-                title="Setup Required",
-                border_style="red",
-            )
-        )
+        console.print(Panel("[bold red]Spotify credentials not set![/]\n\nSet the following environment variables:\n\n  [green]SPOTIPY_CLIENT_ID[/]\n  [green]SPOTIPY_CLIENT_SECRET[/]\n  [green]SPOTIPY_REDIRECT_URI[/]", title="Setup Required", border_style="red"))
         sys.exit(1)
 
     with console.status("[bold green]Connecting to Spotify…[/]"):

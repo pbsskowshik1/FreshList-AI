@@ -1,0 +1,38 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check syntax (review_queue.py)
+        run: python -m py_compile review_queue.py
+
+      - name: Check syntax (playlist_scanner.py)
+        run: python -m py_compile playlist_scanner.py
+
+      - name: Verify imports load correctly
+        run: |
+          python -c "import spotipy; print('spotipy OK')"
+          python -c "import rich; print('rich OK')"
+          python -c "import schedule; print('schedule OK')"
+
+      - name: Check --help flag works (no credentials needed)
+        run: python playlist_scanner.py --help

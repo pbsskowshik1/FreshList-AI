@@ -16,7 +16,8 @@ REDIRECT_URI = os.environ.get("SPOTIPY_REDIRECT_URI", "https://freshlist-ai.onre
 
 ENABLE_ARCHIVE_BACKUP = os.environ.get("ENABLE_ARCHIVE_BACKUP", "true").lower() == "true"
 ARCHIVE_PLAYLIST_NAME = "FreshList Archive"
-MAX_TRACK_AGE_YEARS = 3  # Only remove tracks released 3+ years ago
+MAX_TRACK_AGE_YEARS = 3      # Only remove tracks released 3+ years ago
+MIN_POPULARITY_SCORE = 25    # Threshold corresponding to higher listener/stream metrics (> ~12,000 listeners)
 
 SCOPES = (
     "user-read-playback-state "
@@ -109,16 +110,21 @@ def get_similar_track(sp, seed_track_id, seed_artist_id):
     return None
 
 
-def is_track_older_than_limit(track_item, max_years=MAX_TRACK_AGE_YEARS):
-    """Returns True if track release date is older than max_years."""
+def should_remove_track(track_item):
+    """Checks if a track meets both criteria: release date > 3 years AND popularity > threshold."""
     release_date_str = track_item.get("album", {}).get("release_date", "")
     if not release_date_str:
-        return False
-    
+        return False, 0, 0
+
     release_date = parse_release_date(release_date_str)
     age_days = (datetime.now() - release_date).days
     age_years = age_days / 365.25
-    return age_years >= max_years, age_years
+    popularity = track_item.get("popularity", 0)
+
+    is_old_enough = age_years >= MAX_TRACK_AGE_YEARS
+    has_enough_listeners = popularity >= MIN_POPULARITY_SCORE
+
+    return (is_old_enough and has_enough_listeners), age_years, popularity
 
 
 def process_and_replace_track(sp, playlist_id, track_item, playlist_name):
@@ -168,7 +174,7 @@ def process_and_replace_track(sp, playlist_id, track_item, playlist_name):
 
 
 def scan_entire_playlist(playlist_id):
-    """Fetches all items in a playlist and cleans older tracks."""
+    """Fetches all items in a playlist and cleans older/popular tracks."""
     auth_manager = get_auth_manager()
     token_info = auth_manager.get_cached_token()
     if not token_info or not auth_manager.validate_token(token_info):
@@ -183,7 +189,6 @@ def scan_entire_playlist(playlist_id):
 
     print(f"[FreshList-AI] Starting full scan for playlist: '{playlist_name}'...")
     
-    # Get all tracks (handles pagination)
     results = sp.playlist_items(playlist_id)
     tracks = results.get("items", [])
     while results.get("next"):
@@ -196,14 +201,16 @@ def scan_entire_playlist(playlist_id):
         if not track or not track.get("id"):
             continue
 
-        is_old, age = is_track_older_than_limit(track)
-        if is_old:
-            print(f"[FreshList-AI] Found track '{track['name']}' ({age:.1f} yrs old). Replacing and archiving...")
+        should_remove, age, popularity = should_remove_track(track)
+        if should_remove:
+            print(f"[FreshList-AI] Removing '{track['name']}' (Age: {age:.1f} yrs, Popularity: {popularity})...")
             process_and_replace_track(sp, playlist_id, track, playlist_name)
             cleaned += 1
-            time.sleep(1) # Prevent hitting API rate limits
+            time.sleep(1)
+        else:
+            print(f"[FreshList-AI] Skipped '{track['name']}' (Age: {age:.1f} yrs, Popularity: {popularity})")
 
-    print(f"[FreshList-AI] Completed full scan for '{playlist_name}'. Processed {cleaned} old tracks.")
+    print(f"[FreshList-AI] Completed full scan for '{playlist_name}'. Processed {cleaned} qualifying tracks.")
 
 
 # --- SPOTIFY BACKGROUND WORKER ---
@@ -244,8 +251,8 @@ def spotify_agent_loop():
                             playlist_name = playlist_info.get("name", "Active Playlist")
                             playback_state["current_playlist"] = playlist_name
 
-                            is_old, age = is_track_older_than_limit(track_item)
-                            if is_old and playlist_name.lower() != ARCHIVE_PLAYLIST_NAME.lower():
+                            should_remove, age, popularity = should_remove_track(track_item)
+                            if should_remove and playlist_name.lower() != ARCHIVE_PLAYLIST_NAME.lower():
                                 process_and_replace_track(sp, playlist_id, track_item, playlist_name)
                             
                             last_processed_track_uri = track_uri
@@ -284,7 +291,6 @@ async def home(request: Request):
 async def scan_playlist_endpoint():
     playlist_id = playback_state.get("active_playlist_id")
     if playlist_id:
-        # Run scan in background thread so HTTP response returns immediately
         thread = threading.Thread(target=scan_entire_playlist, args=(playlist_id,), daemon=True)
         thread.start()
         return {"status": "started", "message": "Full playlist scan initiated."}

@@ -74,16 +74,20 @@ def get_auth_manager():
 def load_playlist_cache(sp, playlist_id):
     """Loads all existing track IDs into memory for the active playlist."""
     global PLAYLIST_TRACK_CACHE
-    
+
     if PLAYLIST_TRACK_CACHE["playlist_id"] == playlist_id and PLAYLIST_TRACK_CACHE["track_ids"]:
         return PLAYLIST_TRACK_CACHE["track_ids"]
 
     print(f"[Cache Load] Syncing track list for playlist ID: {playlist_id}")
     track_ids = set()
     try:
-        results = sp.playlist_items(playlist_id, fields="items(track(id,uri)),next")
+        # Fetch full items without overly restrictive 'fields' filter strings
+        results = sp.playlist_items(playlist_id, additional_types=['track'])
         while results:
-            for item in results.get("items", []):
+            items = results.get("items", [])
+            for item in items:
+                if not item:
+                    continue
                 t = item.get("track")
                 if t:
                     tid = t.get("id")
@@ -91,10 +95,12 @@ def load_playlist_cache(sp, playlist_id):
                         tid = t["uri"].split(":")[-1]
                     if tid:
                         track_ids.add(tid)
+            
             if results.get("next"):
                 results = sp.next(results)
             else:
                 break
+
     except Exception as e:
         print(f"[Cache Load Error] {e}")
 

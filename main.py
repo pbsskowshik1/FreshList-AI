@@ -72,7 +72,7 @@ def get_auth_manager():
 
 
 def load_playlist_cache(sp, playlist_id):
-    """Loads all existing track IDs into memory by checking both direct items and nested tracks.items."""
+    """Loads all existing track IDs into memory by parsing direct track objects or wrappers."""
     global PLAYLIST_TRACK_CACHE
 
     if PLAYLIST_TRACK_CACHE["playlist_id"] == playlist_id and PLAYLIST_TRACK_CACHE["track_ids"]:
@@ -87,10 +87,8 @@ def load_playlist_cache(sp, playlist_id):
             print(f"[Cache Load Error] Unexpected playlist response type: {type(playlist_data)}")
             return track_ids
 
-        # 1. Primary: Direct 'items' list (as revealed in the inspector log)
+        # Extract items list
         items = playlist_data.get("items", [])
-        
-        # 2. Fallback: Nested 'tracks.items' structure
         if not items:
             tracks_obj = playlist_data.get("tracks", {})
             if isinstance(tracks_obj, dict):
@@ -98,29 +96,44 @@ def load_playlist_cache(sp, playlist_id):
 
         print(f"[Cache Load] Processing {len(items)} initial playlist items...")
 
-        # Process first batch
+        def extract_id(obj):
+            if not isinstance(obj, dict):
+                return None
+            
+            # Check direct id
+            tid = obj.get("id")
+            if tid and isinstance(tid, str) and not tid.startswith("spotify:"):
+                return tid
+
+            # Check uri
+            uri = obj.get("uri", "")
+            if uri and "spotify:track:" in uri:
+                return uri.split(":")[-1]
+
+            return None
+
         for item in items:
             if not isinstance(item, dict):
                 continue
 
-            track = item.get("track")
-            target = track if isinstance(track, dict) else item
+            # 1. Try track nested inside item
+            tid = extract_id(item.get("track"))
 
-            tid = target.get("id")
-            uri = target.get("uri", "")
+            # 2. Try direct item object
+            if not tid:
+                tid = extract_id(item)
 
-            if not tid and uri and "spotify:track:" in uri:
-                tid = uri.split(":")[-1]
+            # 3. Try item['track']['track'] if double-nested
+            if not tid and isinstance(item.get("track"), dict):
+                tid = extract_id(item["track"].get("track"))
 
             if tid:
                 track_ids.add(tid)
 
-        # Pagination handling if playlist exceeds initial page limit
-        next_url = None
-        if "next" in playlist_data:
-            next_url = playlist_data.get("next")
-        elif isinstance(playlist_data.get("tracks"), dict):
-            next_url = playlist_data.get("tracks", {}).get("next")
+        # Pagination handling
+        next_url = playlist_data.get("next") or (
+            playlist_data.get("tracks", {}).get("next") if isinstance(playlist_data.get("tracks"), dict) else None
+        )
 
         while next_url:
             next_page = sp.next({"next": next_url})
@@ -132,15 +145,7 @@ def load_playlist_cache(sp, playlist_id):
                 if not isinstance(item, dict):
                     continue
 
-                track = item.get("track")
-                target = track if isinstance(track, dict) else item
-
-                tid = target.get("id")
-                uri = target.get("uri", "")
-
-                if not tid and uri and "spotify:track:" in uri:
-                    tid = uri.split(":")[-1]
-
+                tid = extract_id(item.get("track")) or extract_id(item)
                 if tid:
                     track_ids.add(tid)
 

@@ -72,7 +72,7 @@ def get_auth_manager():
 
 
 def load_playlist_cache(sp, playlist_id):
-    """Loads all existing track IDs into memory for the active playlist."""
+    """Loads all existing track IDs into memory using the primary sp.playlist endpoint."""
     global PLAYLIST_TRACK_CACHE
 
     if PLAYLIST_TRACK_CACHE["playlist_id"] == playlist_id and PLAYLIST_TRACK_CACHE["track_ids"]:
@@ -81,10 +81,11 @@ def load_playlist_cache(sp, playlist_id):
     print(f"[Cache Load] Syncing track list for playlist ID: {playlist_id}")
     track_ids = set()
     try:
-        # Fetch full items without overly restrictive 'fields' filter strings
-        results = sp.playlist_items(playlist_id, additional_types=['track'])
-        while results:
-            items = results.get("items", [])
+        playlist_data = sp.playlist(playlist_id)
+        tracks_data = playlist_data.get("tracks", {})
+        items = tracks_data.get("items", [])
+        
+        while items:
             for item in items:
                 if not item:
                     continue
@@ -95,9 +96,10 @@ def load_playlist_cache(sp, playlist_id):
                         tid = t["uri"].split(":")[-1]
                     if tid:
                         track_ids.add(tid)
-            
-            if results.get("next"):
-                results = sp.next(results)
+
+            if tracks_data.get("next"):
+                tracks_data = sp.next(tracks_data)
+                items = tracks_data.get("items", [])
             else:
                 break
 
@@ -110,6 +112,7 @@ def load_playlist_cache(sp, playlist_id):
     return track_ids
 
 
+# --- ADD process_playing_track HERE ---
 def process_playing_track(sp, playlist_id, track_item, playlist_name):
     """Evaluates if the current track should be added as a Smart Shuffle recommendation."""
     global PLAYLIST_TRACK_CACHE
@@ -118,7 +121,6 @@ def process_playing_track(sp, playlist_id, track_item, playlist_name):
     track_name = track_item.get("name", "Unknown Track")
     artist_name = track_item.get("artists", [{}])[0].get("name", "Unknown Artist")
 
-    # Extract ID
     track_id = track_item.get("id")
     if not track_id and track_uri.startswith("spotify:track:"):
         track_id = track_uri.split(":")[-1]
@@ -128,6 +130,11 @@ def process_playing_track(sp, playlist_id, track_item, playlist_name):
 
     # Ensure local cache is populated
     existing_ids = load_playlist_cache(sp, playlist_id)
+
+    # 0. Safety Guard: Skip if cache failed to sync tracks
+    if len(existing_ids) == 0:
+        print(f"[Cache Warning] Playlist cache returned 0 tracks. Skipping evaluation to prevent duplicate additions.")
+        return
 
     # 1. Exact Duplicate Check
     if track_id in existing_ids:
@@ -147,7 +154,6 @@ def process_playing_track(sp, playlist_id, track_item, playlist_name):
         except Exception:
             pass
 
-    # Safety floor if Spotify API omits popularity
     if popularity == 0:
         popularity = 50
 
@@ -159,7 +165,7 @@ def process_playing_track(sp, playlist_id, track_item, playlist_name):
     try:
         sp.playlist_add_items(playlist_id=playlist_id, items=[track_uri])
         
-        # Update local cache immediately so loop never adds it twice
+        # Add ID directly to local memory so it skips on the next check pass
         PLAYLIST_TRACK_CACHE["track_ids"].add(track_id)
 
         print(f"🎉 [SUCCESS] Added Smart Shuffle track '{track_name}' by {artist_name} to '{playlist_name}'!")
@@ -183,7 +189,6 @@ def process_playing_track(sp, playlist_id, track_item, playlist_name):
 
     except Exception as e:
         print(f"[Add Track Error] {e}")
-
 
 # --- SPOTIFY BACKGROUND WORKER ---
 def spotify_agent_loop():

@@ -72,7 +72,7 @@ def get_auth_manager():
 
 
 def load_playlist_cache(sp, playlist_id):
-    """Loads all existing track IDs into memory by parsing direct track objects or wrappers."""
+    """Loads all existing track IDs into memory with target object printing."""
     global PLAYLIST_TRACK_CACHE
 
     if PLAYLIST_TRACK_CACHE["playlist_id"] == playlist_id and PLAYLIST_TRACK_CACHE["track_ids"]:
@@ -83,76 +83,38 @@ def load_playlist_cache(sp, playlist_id):
 
     try:
         playlist_data = sp.playlist(playlist_id)
-        if not isinstance(playlist_data, dict):
-            print(f"[Cache Load Error] Unexpected playlist response type: {type(playlist_data)}")
-            return track_ids
-
-        # Extract items list
         items = playlist_data.get("items", [])
-        if not items:
-            tracks_obj = playlist_data.get("tracks", {})
-            if isinstance(tracks_obj, dict):
-                items = tracks_obj.get("items", [])
+        if not items and isinstance(playlist_data.get("tracks"), dict):
+            items = playlist_data.get("tracks", {}).get("items", [])
 
         print(f"[Cache Load] Processing {len(items)} initial playlist items...")
 
-        def extract_id(obj):
-            if not isinstance(obj, dict):
-                return None
-            
-            # Check direct id
-            tid = obj.get("id")
-            if tid and isinstance(tid, str) and not tid.startswith("spotify:"):
-                return tid
-
-            # Check uri
-            uri = obj.get("uri", "")
-            if uri and "spotify:track:" in uri:
-                return uri.split(":")[-1]
-
-            return None
+        if items and len(items) > 0:
+            first_item = items[0]
+            print(f"[Item Inspector] Type of item: {type(first_item)}")
+            print(f"[Item Inspector] Raw item content: {first_item}")
 
         for item in items:
             if not isinstance(item, dict):
                 continue
 
-            # 1. Try track nested inside item
-            tid = extract_id(item.get("track"))
+            # Check every value in the item dict recursively for a track ID
+            def search_dict(d):
+                if isinstance(d, dict):
+                    if d.get("type") == "track" and d.get("id"):
+                        return d.get("id")
+                    for k, v in d.items():
+                        res = search_dict(v)
+                        if res:
+                            return res
+                return None
 
-            # 2. Try direct item object
-            if not tid:
-                tid = extract_id(item)
-
-            # 3. Try item['track']['track'] if double-nested
-            if not tid and isinstance(item.get("track"), dict):
-                tid = extract_id(item["track"].get("track"))
-
+            tid = search_dict(item)
             if tid:
                 track_ids.add(tid)
 
-        # Pagination handling
-        next_url = playlist_data.get("next") or (
-            playlist_data.get("tracks", {}).get("next") if isinstance(playlist_data.get("tracks"), dict) else None
-        )
-
-        while next_url:
-            next_page = sp.next({"next": next_url})
-            if not next_page or not isinstance(next_page, dict):
-                break
-
-            page_items = next_page.get("items", [])
-            for item in page_items:
-                if not isinstance(item, dict):
-                    continue
-
-                tid = extract_id(item.get("track")) or extract_id(item)
-                if tid:
-                    track_ids.add(tid)
-
-            next_url = next_page.get("next")
-
     except Exception as e:
-        print(f"[Cache Load Error] Exception while loading playlist tracks: {e}")
+        print(f"[Cache Load Error] {e}")
 
     PLAYLIST_TRACK_CACHE["playlist_id"] = playlist_id
     PLAYLIST_TRACK_CACHE["track_ids"] = track_ids

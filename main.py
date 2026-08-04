@@ -12,7 +12,7 @@ import uvicorn
 # --- CONFIGURATION ---
 CLIENT_ID = os.environ.get("SPOTIPY_CLIENT_ID", "YOUR_CLIENT_ID")
 CLIENT_SECRET = os.environ.get("SPOTIPY_CLIENT_SECRET", "YOUR_CLIENT_SECRET")
-REDIRECT_URI = os.environ.get("SPOTIPY_REDIRECT_URI", "http://127.0.0.1:8080/callback")
+REDIRECT_URI = os.environ.get("SPOTIPY_REDIRECT_URI", "https://freshlist-ai.onrender.com")
 
 ENABLE_ARCHIVE_BACKUP = os.environ.get("ENABLE_ARCHIVE_BACKUP", "true").lower() == "true"
 ARCHIVE_PLAYLIST_NAME = "FreshList Archive"
@@ -48,10 +48,10 @@ playback_state = {
     "added_history": []
 }
 
-# Local cache for current playlist track URIs
-playlist_cache = {
+# In-memory storage for playlist track IDs
+PLAYLIST_TRACK_CACHE = {
     "playlist_id": None,
-    "uris": set()
+    "track_ids": set()
 }
 
 
@@ -71,8 +71,14 @@ def get_auth_manager():
     )
 
 
-def fetch_playlist_track_ids(sp, playlist_id):
-    """Fetches all track IDs currently inside the target playlist directly from Spotify."""
+def load_playlist_cache(sp, playlist_id):
+    """Loads all existing track IDs into memory for the active playlist."""
+    global PLAYLIST_TRACK_CACHE
+    
+    if PLAYLIST_TRACK_CACHE["playlist_id"] == playlist_id and PLAYLIST_TRACK_CACHE["track_ids"]:
+        return PLAYLIST_TRACK_CACHE["track_ids"]
+
+    print(f"[Cache Load] Syncing track list for playlist ID: {playlist_id}")
     track_ids = set()
     try:
         results = sp.playlist_items(playlist_id, fields="items(track(id,uri)),next")
@@ -80,69 +86,77 @@ def fetch_playlist_track_ids(sp, playlist_id):
             for item in results.get("items", []):
                 t = item.get("track")
                 if t:
-                    if t.get("id"):
-                        track_ids.add(t["id"])
-                    elif t.get("uri") and t["uri"].startswith("spotify:track:"):
-                        track_ids.add(t["uri"].split(":")[-1])
+                    tid = t.get("id")
+                    if not tid and t.get("uri") and t["uri"].startswith("spotify:track:"):
+                        tid = t["uri"].split(":")[-1]
+                    if tid:
+                        track_ids.add(tid)
             if results.get("next"):
                 results = sp.next(results)
             else:
                 break
     except Exception as e:
-        print(f"[Playlist Fetch Error] {e}")
+        print(f"[Cache Load Error] {e}")
+
+    PLAYLIST_TRACK_CACHE["playlist_id"] = playlist_id
+    PLAYLIST_TRACK_CACHE["track_ids"] = track_ids
+    print(f"[Cache Sync Complete] Found {len(track_ids)} unique tracks in playlist.")
     return track_ids
 
 
-def handle_track_evaluation(sp, playlist_id, track_item, playlist_name):
-    """Appends track ONLY if it is genuinely absent from the target playlist."""
-    global playlist_cache
+def process_playing_track(sp, playlist_id, track_item, playlist_name):
+    """Evaluates if the current track should be added as a Smart Shuffle recommendation."""
+    global PLAYLIST_TRACK_CACHE
 
     track_uri = track_item.get("uri", "")
     track_name = track_item.get("name", "Unknown Track")
     artist_name = track_item.get("artists", [{}])[0].get("name", "Unknown Artist")
 
-    # Extract raw track ID
+    # Extract ID
     track_id = track_item.get("id")
     if not track_id and track_uri.startswith("spotify:track:"):
         track_id = track_uri.split(":")[-1]
 
     if not track_id:
-        print(f"[Skip] Could not determine track ID for '{track_name}'.")
         return
 
-    # Fetch live track IDs directly from Spotify for the active playlist
-    current_playlist_track_ids = fetch_playlist_track_ids(sp, playlist_id)
+    # Ensure local cache is populated
+    existing_ids = load_playlist_cache(sp, playlist_id)
 
-    # 1. Strict Duplicate Check
-    if track_id in current_playlist_track_ids:
-        print(f"[Skip] Track '{track_name}' ({track_id}) is ALREADY in playlist '{playlist_name}'.")
+    # 1. Exact Duplicate Check
+    if track_id in existing_ids:
+        print(f"[Skip] '{track_name}' already exists in '{playlist_name}'.")
         playback_state["is_smart_shuffle"] = False
         return
 
-    # 2. Track is missing from playlist -> Treat as Smart Shuffle recommendation
+    # 2. Track is NOT in original playlist -> Smart Shuffle recommendation detected
     playback_state["is_smart_shuffle"] = True
 
     # 3. Resolve Popularity
     popularity = track_item.get("popularity", 0)
-    try:
-        full_track = sp.track(track_id)
-        fetched_pop = full_track.get("popularity", 0)
-        if fetched_pop > 0:
-            popularity = fetched_pop
-    except Exception as e:
-        print(f"[Metadata Fetch Error] {e}")
+    if popularity == 0:
+        try:
+            full_track = sp.track(track_id)
+            popularity = full_track.get("popularity", 0)
+        except Exception:
+            pass
 
+    # Safety floor if Spotify API omits popularity
     if popularity == 0:
         popularity = 50
 
     if popularity < MIN_POPULARITY_SCORE:
-        print(f"[Skip] Track '{track_name}' popularity ({popularity}) below threshold ({MIN_POPULARITY_SCORE}).")
+        print(f"[Skip] '{track_name}' popularity ({popularity}) below threshold ({MIN_POPULARITY_SCORE}).")
         return
 
-    # 4. Add new Smart Shuffle track to playlist
+    # 4. Add to Playlist and update in-memory cache immediately
     try:
         sp.playlist_add_items(playlist_id=playlist_id, items=[track_uri])
-        print(f"🎉 [Smart Shuffle SUCCESS] Added '{track_name}' by {artist_name} (Pop: {popularity}) to '{playlist_name}'!")
+        
+        # Update local cache immediately so loop never adds it twice
+        PLAYLIST_TRACK_CACHE["track_ids"].add(track_id)
+
+        print(f"🎉 [SUCCESS] Added Smart Shuffle track '{track_name}' by {artist_name} to '{playlist_name}'!")
 
         timestamp = time.strftime("%H:%M:%S")
         images = track_item.get("album", {}).get("images", [])
@@ -162,13 +176,13 @@ def handle_track_evaluation(sp, playlist_id, track_item, playlist_name):
         playback_state["added_history"] = playback_state["added_history"][:20]
 
     except Exception as e:
-        print(f"[Smart Shuffle Add Error] {e}")
+        print(f"[Add Track Error] {e}")
 
 
 # --- SPOTIFY BACKGROUND WORKER ---
 def spotify_agent_loop():
     global playback_state
-    last_processed_track_uri = None
+    last_processed_track_id = None
 
     while True:
         try:
@@ -182,16 +196,18 @@ def spotify_agent_loop():
                 current = sp.current_user_playing_track()
                 if current and current.get("is_playing"):
                     track_item = current.get("item")
-                    if not track_item or not track_item.get("id"):
+                    if not track_item:
                         time.sleep(5)
                         continue
 
-                    track_uri = track_item["uri"]
+                    track_uri = track_item.get("uri", "")
+                    track_id = track_item.get("id") or (track_uri.split(":")[-1] if track_uri.startswith("spotify:track:") else None)
+
                     images = track_item.get("album", {}).get("images", [])
                     image_url = images[0]["url"] if images else None
 
-                    playback_state["track"] = track_item["name"]
-                    playback_state["artist"] = track_item["artists"][0]["name"]
+                    playback_state["track"] = track_item.get("name", "Unknown")
+                    playback_state["artist"] = track_item.get("artists", [{}])[0].get("name", "Unknown")
                     playback_state["image_url"] = image_url
                     playback_state["status"] = "Playing"
 
@@ -201,15 +217,16 @@ def spotify_agent_loop():
                         playlist_id = playlist_uri.split(":")[-1]
                         playback_state["active_playlist_id"] = playlist_id
 
-                        if track_uri != last_processed_track_uri:
+                        # Only process evaluation when track ID changes
+                        if track_id and track_id != last_processed_track_id:
                             playlist_info = sp.playlist(playlist_id, fields="name")
                             playlist_name = playlist_info.get("name", "Active Playlist")
                             playback_state["current_playlist"] = playlist_name
 
                             if playlist_name.lower() != ARCHIVE_PLAYLIST_NAME.lower():
-                                handle_track_evaluation(sp, playlist_id, track_item, playlist_name)
+                                process_playing_track(sp, playlist_id, track_item, playlist_name)
 
-                            last_processed_track_uri = track_uri
+                            last_processed_track_id = track_id
                     else:
                         playback_state["current_playlist"] = "Not playing from a playlist"
                         playback_state["active_playlist_id"] = None

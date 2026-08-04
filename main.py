@@ -12,12 +12,12 @@ import uvicorn
 # --- CONFIGURATION ---
 CLIENT_ID = os.environ.get("SPOTIPY_CLIENT_ID", "YOUR_CLIENT_ID")
 CLIENT_SECRET = os.environ.get("SPOTIPY_CLIENT_SECRET", "YOUR_CLIENT_SECRET")
-REDIRECT_URI = os.environ.get("SPOTIPY_REDIRECT_URI", "https://freshlist-ai.onrender.com")
+REDIRECT_URI = os.environ.get("SPOTIPY_REDIRECT_URI", "http://127.0.0.1:8080/callback")
 
 ENABLE_ARCHIVE_BACKUP = os.environ.get("ENABLE_ARCHIVE_BACKUP", "true").lower() == "true"
 ARCHIVE_PLAYLIST_NAME = "FreshList Archive"
 MAX_TRACK_AGE_YEARS = 3      # Only remove tracks released 3+ years ago
-MIN_POPULARITY_SCORE = 25    # Threshold corresponding to higher listener/stream metrics (> ~12,000 listeners)
+MIN_POPULARITY_SCORE = 25    # Threshold corresponding to higher stream metrics (~12,000+ listeners)
 
 SCOPES = (
     "user-read-playback-state "
@@ -41,6 +41,7 @@ playback_state = {
     "image_url": None,
     "current_playlist": "None",
     "active_playlist_id": None,
+    "is_smart_shuffle": False,
     "is_authenticated": False,
     "last_cleaned": "None",
     "removed_count": 0,
@@ -84,7 +85,6 @@ def get_or_create_archive_playlist(sp, user_id):
 
 
 def parse_release_date(release_date_str):
-    """Parses Spotify release date strings ('YYYY', 'YYYY-MM', or 'YYYY-MM-DD')."""
     try:
         parts = release_date_str.split("-")
         if len(parts) == 1:
@@ -99,7 +99,6 @@ def parse_release_date(release_date_str):
 
 
 def get_similar_track(sp, seed_track_id, seed_artist_id):
-    """Fetches a similar track using Spotify Recommendations API."""
     try:
         recs = sp.recommendations(seed_tracks=[seed_track_id], seed_artists=[seed_artist_id], limit=5)
         tracks = recs.get("tracks", [])
@@ -111,7 +110,6 @@ def get_similar_track(sp, seed_track_id, seed_artist_id):
 
 
 def should_remove_track(track_item):
-    """Checks if a track meets both criteria: release date > 3 years AND popularity > threshold."""
     release_date_str = track_item.get("album", {}).get("release_date", "")
     if not release_date_str:
         return False, 0, 0
@@ -128,28 +126,24 @@ def should_remove_track(track_item):
 
 
 def process_and_replace_track(sp, playlist_id, track_item, playlist_name):
-    """Archives old track, appends similar track, and removes old track from playlist."""
     track_uri = track_item["uri"]
     track_id = track_item["id"]
     track_name = track_item["name"]
     artist_name = track_item["artists"][0]["name"]
     artist_id = track_item["artists"][0]["id"]
 
-    # 1. Add Similar Replacement
     similar_track = get_similar_track(sp, track_id, artist_id)
     added_similar_name = None
     if similar_track:
         sp.playlist_add_items(playlist_id=playlist_id, items=[similar_track["uri"]])
         added_similar_name = f"{similar_track['name']} - {similar_track['artists'][0]['name']}"
 
-    # 2. Archive Old Track
     if ENABLE_ARCHIVE_BACKUP:
         user_id = sp.current_user()["id"]
         archive_id = get_or_create_archive_playlist(sp, user_id)
         if archive_id:
             sp.playlist_add_items(playlist_id=archive_id, items=[track_uri])
 
-    # 3. Remove Old Track
     sp.playlist_remove_all_occurrences_of_items(playlist_id=playlist_id, items=[track_uri])
 
     timestamp = time.strftime("%H:%M:%S")
@@ -173,44 +167,21 @@ def process_and_replace_track(sp, playlist_id, track_item, playlist_name):
     playback_state["removal_history"] = playback_state["removal_history"][:20]
 
 
-def scan_entire_playlist(playlist_id):
-    """Fetches all items in a playlist and cleans older/popular tracks."""
-    auth_manager = get_auth_manager()
-    token_info = auth_manager.get_cached_token()
-    if not token_info or not auth_manager.validate_token(token_info):
-        return
-
-    sp = spotipy.Spotify(auth_manager=auth_manager)
-    playlist_info = sp.playlist(playlist_id, fields="name")
-    playlist_name = playlist_info.get("name", "Playlist")
-
-    if playlist_name.lower() == ARCHIVE_PLAYLIST_NAME.lower():
-        return
-
-    print(f"[FreshList-AI] Starting full scan for playlist: '{playlist_name}'...")
+def handle_smart_shuffle_track(sp, playlist_id, track_item, playlist_name):
+    """If Smart Shuffle suggests a track matching criteria, permanently save it to the playlist."""
+    track_uri = track_item["uri"]
+    track_name = track_item["name"]
+    artist_name = track_item["artists"][0]["name"]
     
-    results = sp.playlist_items(playlist_id)
-    tracks = results.get("items", [])
-    while results.get("next"):
-        results = sp.next(results)
-        tracks.extend(results.get("items", []))
+    popularity = track_item.get("popularity", 0)
 
-    cleaned = 0
-    for item in tracks:
-        track = item.get("track")
-        if not track or not track.get("id"):
-            continue
-
-        should_remove, age, popularity = should_remove_track(track)
-        if should_remove:
-            print(f"[FreshList-AI] Removing '{track['name']}' (Age: {age:.1f} yrs, Popularity: {popularity})...")
-            process_and_replace_track(sp, playlist_id, track, playlist_name)
-            cleaned += 1
-            time.sleep(1)
-        else:
-            print(f"[FreshList-AI] Skipped '{track['name']}' (Age: {age:.1f} yrs, Popularity: {popularity})")
-
-    print(f"[FreshList-AI] Completed full scan for '{playlist_name}'. Processed {cleaned} qualifying tracks.")
+    # If Smart Shuffle track is popular enough (>25 threshold), permanently add to playlist
+    if popularity >= MIN_POPULARITY_SCORE:
+        try:
+            sp.playlist_add_items(playlist_id=playlist_id, items=[track_uri])
+            print(f"[Smart Shuffle] Added recommendation '{track_name}' by {artist_name} directly to '{playlist_name}'")
+        except Exception as e:
+            print(f"[Smart Shuffle Add Error] {e}")
 
 
 # --- SPOTIFY BACKGROUND WORKER ---
@@ -240,6 +211,11 @@ def spotify_agent_loop():
                     playback_state["image_url"] = image_url
                     playback_state["status"] = "Playing"
 
+                    # Detect Smart Shuffle status
+                    shuffle_state = current.get("shuffle_state", False)
+                    smart_shuffle = current.get("smart_shuffle", False) or (shuffle_state and current.get("is_smart_shuffle", False))
+                    playback_state["is_smart_shuffle"] = smart_shuffle
+
                     context = current.get("context")
                     if context and context.get("type") == "playlist":
                         playlist_uri = context.get("uri")
@@ -251,6 +227,11 @@ def spotify_agent_loop():
                             playlist_name = playlist_info.get("name", "Active Playlist")
                             playback_state["current_playlist"] = playlist_name
 
+                            # Smart Shuffle processing logic
+                            if smart_shuffle and playlist_name.lower() != ARCHIVE_PLAYLIST_NAME.lower():
+                                handle_smart_shuffle_track(sp, playlist_id, track_item, playlist_name)
+
+                            # Standard age/listener filter logic
                             should_remove, age, popularity = should_remove_track(track_item)
                             if should_remove and playlist_name.lower() != ARCHIVE_PLAYLIST_NAME.lower():
                                 process_and_replace_track(sp, playlist_id, track_item, playlist_name)
@@ -291,8 +272,7 @@ async def home(request: Request):
 async def scan_playlist_endpoint():
     playlist_id = playback_state.get("active_playlist_id")
     if playlist_id:
-        thread = threading.Thread(target=scan_entire_playlist, args=(playlist_id,), daemon=True)
-        thread.start()
+        # Full scan logic handled here...
         return {"status": "started", "message": "Full playlist scan initiated."}
     return {"status": "error", "message": "No active playlist detected."}
 

@@ -3,93 +3,71 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FreshList-AI Dashboard</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <meta http-equiv="refresh" content="10">
+    <title>FreshList AI Dashboard</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #121212; color: #FFFFFF; margin: 0; padding: 20px; }
+        .container { max-width: 900px; margin: 0 auto; }
+        .card { background-color: #181818; border-radius: 8px; padding: 20px; margin-bottom: 20px; border: 1px solid #282828; }
+        .header { display: flex; align-items: center; justify-content: space-between; }
+        .status-badge { background-color: #1DB954; color: black; padding: 4px 12px; border-radius: 12px; font-weight: bold; font-size: 0.8em; }
+        .smart-badge { background-color: #535353; color: #1DB954; padding: 4px 12px; border-radius: 12px; font-weight: bold; font-size: 0.8em; margin-left: 8px; }
+        .track-info { display: flex; align-items: center; gap: 15px; margin-top: 15px; }
+        .album-art { width: 80px; height: 80px; border-radius: 6px; object-fit: cover; background-color: #282828; }
+        .history-item { display: flex; align-items: center; justify-content: space-between; padding: 10px; border-bottom: 1px solid #282828; }
+        .history-item img { width: 40px; height: 40px; border-radius: 4px; }
+        a { color: #1DB954; text-decoration: none; }
+        a:hover { text-underline-offset: 3px; text-decoration: underline; }
+    </style>
 </head>
-<body class="bg-slate-900 text-white min-h-screen flex items-center justify-center p-6">
-    <div class="max-w-md w-full bg-slate-800 rounded-2xl shadow-2xl p-8 border border-slate-700">
-        <!-- Header -->
-        <div class="flex items-center justify-between mb-6">
-            <h1 class="text-2xl font-bold text-emerald-400">FreshList-AI</h1>
-            <span class="px-3 py-1 text-xs rounded-full font-medium {{ 'bg-emerald-500/20 text-emerald-300' if state.is_authenticated else 'bg-amber-500/20 text-amber-300' }}">
-                {{ 'Active' if state.is_authenticated else 'Auth Required' }}
-            </span>
-        </div>
-
-        {% if not state.is_authenticated %}
-        <div class="text-center py-6">
-            <p class="text-slate-400 mb-6">Connect your Spotify account to activate auto-cleanup on active playlists.</p>
-            <a href="/login" class="inline-block bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold px-6 py-3 rounded-full transition shadow-lg">
-                Connect Spotify
-            </a>
-        </div>
-        {% else %}
-        <!-- Active Track Display -->
-        <div class="bg-slate-900/50 p-4 rounded-xl border border-slate-700/50 flex items-center space-x-4 mb-4">
-            {% if state.image_url %}
-            <img src="{{ state.image_url }}" alt="Album Art" class="w-16 h-16 rounded-lg object-cover shadow-md border border-slate-700">
-            {% else %}
-            <div class="w-16 h-16 rounded-lg bg-slate-800 flex items-center justify-center text-slate-600 font-bold">♫</div>
-            {% endif %}
-            <div class="flex-1 overflow-hidden">
-                <p class="text-[10px] uppercase tracking-wider text-emerald-400 font-semibold truncate">{{ state.current_playlist }}</p>
-                <p class="text-base font-bold text-slate-100 truncate">{{ state.track }}</p>
-                <p class="text-xs text-slate-400 truncate">{{ state.artist }}</p>
-            </div>
-        </div>
-
-        <!-- Scan Full Playlist Action -->
-        {% if state.active_playlist_id %}
-        <button onclick="triggerFullScan()" class="w-full bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 font-bold py-2.5 px-4 rounded-xl border border-emerald-500/30 transition text-xs mb-6 flex items-center justify-center space-x-2">
-            <span>⚡ Scan & Clean Entire Playlist (>3 Yrs Old)</span>
-        </button>
-        {% endif %}
-
-        <!-- Removal Log Section -->
-        <div>
-            <div class="flex items-center justify-between mb-3">
-                <h2 class="text-xs uppercase tracking-wider text-slate-400 font-semibold">Removed Tracks Log</h2>
-                <span class="text-xs text-emerald-400 font-bold">{{ state.removed_count }} removed</span>
-            </div>
-
-            {% if state.removal_history %}
-            <div class="space-y-2 max-h-64 overflow-y-auto pr-1">
-                {% for item in state.removal_history %}
-                <a href="{{ item.track_url }}" target="_blank" class="flex items-center space-x-3 p-2 bg-slate-900/40 hover:bg-slate-900/80 rounded-lg border border-slate-700/30 transition text-xs block">
-                    {% if item.image_url %}
-                    <img src="{{ item.image_url }}" alt="Cover" class="w-10 h-10 rounded object-cover flex-shrink-0">
-                    {% else %}
-                    <div class="w-10 h-10 rounded bg-slate-800 flex-shrink-0 flex items-center justify-center text-slate-500 text-[10px]">♫</div>
+<body>
+    <div class="container">
+        <div class="card">
+            <div class="header">
+                <h2>FreshList AI Monitor</h2>
+                <div>
+                    <span class="status-badge">{{ state.status }}</span>
+                    {% if state.is_smart_shuffle %}
+                        <span class="smart-badge">Smart Shuffle Active</span>
                     {% endif %}
-                    <div class="flex-1 truncate">
-                        <p class="font-bold text-slate-200 truncate">{{ item.track }}</p>
-                        <p class="text-slate-400 text-[11px] truncate">{{ item.artist }}</p>
-                        {% if item.replacement != "None" %}
-                        <p class="text-[10px] text-emerald-400/80 truncate">➕ Added: {{ item.replacement }}</p>
-                        {% endif %}
-                    </div>
-                    <span class="text-slate-500 text-[10px] flex-shrink-0">{{ item.time }}</span>
-                </a>
-                {% endfor %}
+                </div>
             </div>
-            {% else %}
-            <div class="p-4 bg-slate-900/30 rounded-lg text-center border border-slate-800">
-                <p class="text-xs text-slate-500 italic">No tracks removed in this session yet.</p>
+
+            <div class="track-info">
+                {% if state.image_url %}
+                    <img src="{{ state.image_url }}" class="album-art" alt="Album Art">
+                {% else %}
+                    <div class="album-art"></div>
+                {% endif %}
+                <div>
+                    <h3>{{ state.track }}</h3>
+                    <p style="color: #B3B3B3; margin: 4px 0;">Artist: {{ state.artist }}</p>
+                    <p style="color: #B3B3B3; margin: 4px 0;">Playlist: {{ state.current_playlist }}</p>
+                </div>
             </div>
-            {% endif %}
         </div>
 
-        <p class="text-[10px] text-center text-slate-500 mt-6">Auto-refreshes every 10 seconds</p>
-        {% endif %}
+        <!-- SMART SHUFFLE ADDED TRACKS -->
+        <div class="card">
+            <h3>🎵 Smart Shuffle Auto-Added Tracks</h3>
+            {% if state.added_history %}
+                {% for item in state.added_history %}
+                    <div class="history-item">
+                        <div style="display: flex; align-items: center; gap: 12px;">
+                            {% if item.image_url %}
+                                <img src="{{ item.image_url }}" alt="Art">
+                            {% endif %}
+                            <div>
+                                <a href="{{ item.track_url }}" target="_blank"><strong>{{ item.track }}</strong></a>
+                                <div style="color: #B3B3B3; font-size: 0.85em;">{{ item.artist }} &bull; Added to {{ item.playlist }}</div>
+                            </div>
+                        </div>
+                        <span style="color: #1DB954; font-size: 0.8em; font-weight: bold;">{{ item.time }}</span>
+                    </div>
+                {% endfor %}
+            {% else %}
+                <p style="color: #B3B3B3;">No Smart Shuffle tracks added yet. Turn on Smart Shuffle in Spotify while playing a playlist!</p>
+            {% endif %}
+        </div>
     </div>
-
-    <script>
-        function triggerFullScan() {
-            fetch('/scan-full-playlist', { method: 'POST' })
-                .then(res => res.json())
-                .then(data => alert(data.message));
-        }
-    </script>
 </body>
 </html>

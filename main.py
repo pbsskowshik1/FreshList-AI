@@ -94,10 +94,14 @@ def handle_track_evaluation(sp, playlist_id, track_item, playlist_name):
     """Appends track if it's a new recommendation not originally in the playlist."""
     global playlist_cache
 
+    track_uri = track_item.get("uri", "")
+    track_name = track_item.get("name", "Unknown Track")
+    artist_name = track_item.get("artists", [{}])[0].get("name", "Unknown Artist")
+
+    # Extract track_id directly from track_item OR parse from track_uri (spotify:track:<id>)
     track_id = track_item.get("id")
-    track_uri = track_item["uri"]
-    track_name = track_item["name"]
-    artist_name = track_item["artists"][0]["name"]
+    if not track_id and track_uri.startswith("spotify:track:"):
+        track_id = track_uri.split(":")[-1]
 
     # Refresh playlist cache if playlist changed or empty
     if playlist_cache["playlist_id"] != playlist_id:
@@ -113,14 +117,23 @@ def handle_track_evaluation(sp, playlist_id, track_item, playlist_name):
     # 2. Track is NOT in playlist -> treat as Smart Shuffle recommendation
     playback_state["is_smart_shuffle"] = True
 
-    # 3. Verify popularity
+    # 3. Always attempt to fetch full track metadata if initial popularity is 0
     popularity = track_item.get("popularity", 0)
-    if popularity == 0 and track_id:
+    if track_id:
         try:
             full_track = sp.track(track_id)
-            popularity = full_track.get("popularity", 0)
-        except Exception:
-            pass
+            fetched_pop = full_track.get("popularity", 0)
+            if fetched_pop > 0:
+                popularity = fetched_pop
+                print(f"[Popularity Resolved] '{track_name}' -> Real Popularity: {popularity}")
+        except Exception as e:
+            print(f"[Metadata Fetch Error for {track_name}] {e}")
+
+    # Fallback check: If Spotify API fails to return popularity score for a valid recommendation,
+    # default to 50 so genuine recommended tracks aren't discarded.
+    if popularity == 0:
+        popularity = 50
+        print(f"[Popularity Fallback] Defaulting '{track_name}' popularity to 50")
 
     if popularity < MIN_POPULARITY_SCORE:
         print(f"[Skip] Track '{track_name}' popularity ({popularity}) below threshold ({MIN_POPULARITY_SCORE}).")
@@ -129,10 +142,9 @@ def handle_track_evaluation(sp, playlist_id, track_item, playlist_name):
     # 4. Add the recommendation to the playlist
     try:
         sp.playlist_add_items(playlist_id=playlist_id, items=[track_uri])
-        # Update cache so it isn't added again in this session
         playlist_cache["uris"].add(track_uri)
 
-        print(f"🎉 [Smart Shuffle SUCCESS] Added '{track_name}' by {artist_name} to '{playlist_name}'!")
+        print(f"🎉 [Smart Shuffle SUCCESS] Added '{track_name}' by {artist_name} (Pop: {popularity}) to '{playlist_name}'!")
 
         timestamp = time.strftime("%H:%M:%S")
         images = track_item.get("album", {}).get("images", [])

@@ -85,11 +85,9 @@ def load_playlist_cache(sp, playlist_id):
         limit = 100
 
         while True:
-            # Omit additional_types to prevent Spotipy API response structural mutations
             response = sp.playlist_items(playlist_id, limit=limit, offset=offset)
 
             if not response or "items" not in response:
-                print(f"[Cache Debug] Unexpected response structure: {response}")
                 break
 
             items = response.get("items", [])
@@ -97,26 +95,24 @@ def load_playlist_cache(sp, playlist_id):
                 break
 
             for item in items:
-                if not item or not isinstance(item, dict):
+                if not isinstance(item, dict):
                     continue
                 
-                # Check under standard 'track' dictionary wrapper
-                t = item.get("track")
-                
-                # Fallback if 'track' is None or item is flattened
-                if not t:
-                    t = item
+                track = item.get("track")
+                if not track or not isinstance(track, dict):
+                    continue
 
-                if isinstance(t, dict):
-                    tid = t.get("id")
-                    uri = t.get("uri", "")
+                # 1. Standard Track ID
+                tid = track.get("id")
 
-                    # Extract ID from URI if 'id' field is null
-                    if not tid and uri and uri.startswith("spotify:track:"):
+                # 2. Extract from URI if ID is None
+                if not tid:
+                    uri = track.get("uri", "")
+                    if uri and "spotify:track:" in uri:
                         tid = uri.split(":")[-1]
 
-                    if tid:
-                        track_ids.add(tid)
+                if tid:
+                    track_ids.add(tid)
 
             if response.get("next"):
                 offset += limit

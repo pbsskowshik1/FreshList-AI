@@ -11,7 +11,11 @@ import uvicorn
 # --- CONFIGURATION ---
 CLIENT_ID = os.environ.get("SPOTIPY_CLIENT_ID", "YOUR_CLIENT_ID")
 CLIENT_SECRET = os.environ.get("SPOTIPY_CLIENT_SECRET", "YOUR_CLIENT_SECRET")
-REDIRECT_URI = os.environ.get("SPOTIPY_REDIRECT_URI", "https://freshlist-ai.onrender.com")
+REDIRECT_URI = os.environ.get("SPOTIPY_REDIRECT_URI", "http://127.0.0.1:8080/callback")
+
+# Toggle whether to back up removed tracks to a "FreshList Archive" playlist on Spotify
+ENABLE_ARCHIVE_BACKUP = os.environ.get("ENABLE_ARCHIVE_BACKUP", "true").lower() == "true"
+ARCHIVE_PLAYLIST_NAME = "FreshList Archive"
 
 SCOPES = (
     "user-read-playback-state "
@@ -36,10 +40,12 @@ playback_state = {
     "is_authenticated": False,
     "last_cleaned": "None",
     "removed_count": 0,
+    "removal_history": []  # Holds the last 10 removed tracks for dashboard display
 }
 
 
 def get_auth_manager():
+    """Initializes SpotifyOAuth with cached credentials from environment or file."""
     cache_data = os.environ.get("SPOTIPY_CACHE")
     if cache_data and not os.path.exists(CACHE_PATH):
         with open(CACHE_PATH, "w") as f:
@@ -55,24 +61,70 @@ def get_auth_manager():
     )
 
 
-# --- PLAYLIST CLEANUP FUNCTION ---
-def cleanup_from_active_playlist(sp, playlist_id, current_track_uri):
-    """Removes the playing track from the current active playlist."""
+def get_or_create_archive_playlist(sp, user_id):
+    """Retrieves or creates the 'FreshList Archive' playlist on Spotify."""
     try:
-        # Fetch playlist metadata to display the name on dashboard
+        user_playlists = sp.current_user_playlists()
+        for playlist in user_playlists.get("items", []):
+            if playlist["name"].lower() == ARCHIVE_PLAYLIST_NAME.lower():
+                return playlist["id"]
+        
+        # Create playlist if it doesn't exist
+        new_playlist = sp.user_playlist_create(
+            user=user_id,
+            name=ARCHIVE_PLAYLIST_NAME,
+            public=False,
+            description="Automated backup playlist created by FreshList-AI"
+        )
+        return new_playlist["id"]
+    except Exception as e:
+        print(f"[Archive Error] Could not fetch/create archive playlist: {e}")
+        return None
+
+
+# --- PLAYLIST CLEANUP FUNCTION ---
+def cleanup_from_active_playlist(sp, playlist_id, current_track_uri, track_name, artist_name):
+    """Archives (optional) and removes the playing track from the current active playlist."""
+    try:
+        # Fetch playlist metadata
         playlist_info = sp.playlist(playlist_id, fields="name")
         playlist_name = playlist_info.get("name", "Active Playlist")
         playback_state["current_playlist"] = playlist_name
 
-        # Remove track from active playlist
+        # Prevent operating on the archive playlist itself
+        if playlist_name.lower() == ARCHIVE_PLAYLIST_NAME.lower():
+            print(f"[FreshList-AI] Currently playing from archive playlist. Skipping removal.")
+            return
+
+        # 1. Archive track to 'FreshList Archive' on Spotify (if enabled)
+        if ENABLE_ARCHIVE_BACKUP:
+            user_id = sp.current_user()["id"]
+            archive_id = get_or_create_archive_playlist(sp, user_id)
+            if archive_id:
+                sp.playlist_add_items(playlist_id=archive_id, items=[current_track_uri])
+                print(f"[FreshList-AI] Backed up '{track_name}' to {ARCHIVE_PLAYLIST_NAME}")
+
+        # 2. Remove track from the active playing playlist
         sp.playlist_remove_all_occurrences_of_items(
             playlist_id=playlist_id,
             items=[current_track_uri]
         )
-        
-        playback_state["last_cleaned"] = time.strftime("%H:%M:%S UTC")
+
+        # 3. Update dashboard state
+        timestamp = time.strftime("%H:%M:%S")
+        playback_state["last_cleaned"] = timestamp
         playback_state["removed_count"] += 1
-        print(f"[FreshList-AI] Successfully removed {current_track_uri} from {playlist_name}")
+
+        removal_entry = {
+            "track": track_name,
+            "artist": artist_name,
+            "playlist": playlist_name,
+            "time": timestamp
+        }
+        playback_state["removal_history"].insert(0, removal_entry)
+        playback_state["removal_history"] = playback_state["removal_history"][:10]  # Keep last 10 entries
+
+        print(f"[FreshList-AI] Successfully removed '{track_name}' from {playlist_name}")
     except Exception as e:
         print(f"[Cleanup Error] {e}")
 
@@ -102,16 +154,21 @@ def spotify_agent_loop():
                     playback_state["artist"] = artist_name
                     playback_state["status"] = "Playing"
 
-                    # Check context to see if playback is coming from a playlist
+                    # Inspect playback context to find active playlist
                     context = current.get("context")
                     if context and context.get("type") == "playlist":
-                        # URI format: spotify:playlist:<PLAYLIST_ID>
                         playlist_uri = context.get("uri")
                         playlist_id = playlist_uri.split(":")[-1]
 
-                        # Clean up only once per track change
+                        # Process cleanup once per track change
                         if track_uri != last_processed_track_uri:
-                            cleanup_from_active_playlist(sp, playlist_id, track_uri)
+                            cleanup_from_active_playlist(
+                                sp=sp,
+                                playlist_id=playlist_id,
+                                current_track_uri=track_uri,
+                                track_name=track_name,
+                                artist_name=artist_name
+                            )
                             last_processed_track_uri = track_uri
                     else:
                         playback_state["current_playlist"] = "Not playing from a playlist"

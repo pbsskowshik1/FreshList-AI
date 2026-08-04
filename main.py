@@ -11,8 +11,7 @@ import uvicorn
 # --- CONFIGURATION ---
 CLIENT_ID = os.environ.get("SPOTIPY_CLIENT_ID", "YOUR_CLIENT_ID")
 CLIENT_SECRET = os.environ.get("SPOTIPY_CLIENT_SECRET", "YOUR_CLIENT_SECRET")
-# On Render, REDIRECT_URI should be: https://freshlist-ai.onrender.com/callback
-REDIRECT_URI = os.environ.get("SPOTIPY_REDIRECT_URI", "http://127.0.0.1:8080/callback")
+REDIRECT_URI = os.environ.get("SPOTIPY_REDIRECT_URI", "https://freshlist-ai.onrender.com/callback")
 
 SCOPES = (
     "user-read-playback-state "
@@ -38,7 +37,6 @@ playback_state = {
 
 
 def get_auth_manager():
-    # Load cache from Render environment variable if available
     cache_data = os.environ.get("SPOTIPY_CACHE")
     if cache_data and not os.path.exists(CACHE_PATH):
         with open(CACHE_PATH, "w") as f:
@@ -60,7 +58,8 @@ def spotify_agent_loop():
     while True:
         try:
             auth_manager = get_auth_manager()
-            if auth_manager.validate_token(auth_manager.get_cached_token()):
+            token_info = auth_manager.get_cached_token()
+            if token_info and auth_manager.validate_token(token_info):
                 sp = spotipy.Spotify(auth_manager=auth_manager)
                 playback_state["is_authenticated"] = True
 
@@ -83,10 +82,14 @@ def spotify_agent_loop():
 
 
 # --- FASTAPI WEB ROUTES ---
-@app.get("/", response_class=HTMLResponse)
+# Allow both GET and HEAD requests so Render health check passes
+@app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
 async def home(request: Request):
+    # Fixed TemplateResponse syntax for Starlette/Jinja2 on Python 3.14
     return templates.TemplateResponse(
-        "index.html", {"request": request, "state": playback_state}
+        request=request,
+        name="index.html",
+        context={"state": playback_state}
     )
 
 
@@ -110,12 +113,10 @@ async def health():
     return {"status": "ok"}
 
 
-# --- APPLICATION ENTRY POINT ---
+# --- ENTRY POINT ---
 if __name__ == "__main__":
-    # Start Spotify polling agent in background
     agent_thread = threading.Thread(target=spotify_agent_loop, daemon=True)
     agent_thread.start()
 
-    # Start FastAPI Web Server
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)

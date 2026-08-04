@@ -1,1 +1,4 @@
 spotipy
+fastapi
+uvicorn
+jinja2

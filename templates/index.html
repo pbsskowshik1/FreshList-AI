@@ -9,14 +9,19 @@
         .container { max-width: 900px; margin: 0 auto; }
         .card { background-color: #181818; border-radius: 8px; padding: 20px; margin-bottom: 20px; border: 1px solid #282828; }
         .header { display: flex; align-items: center; justify-content: space-between; }
-        .status-badge { background-color: #1DB954; color: black; padding: 4px 12px; border-radius: 12px; font-weight: bold; font-size: 0.8em; }
-        .smart-badge { background-color: #535353; color: #1DB954; padding: 4px 12px; border-radius: 12px; font-weight: bold; font-size: 0.8em; margin-left: 8px; }
+        
+        /* Badges & Buttons */
+        .status-badge { background-color: #1DB954; color: black; padding: 6px 14px; border-radius: 20px; font-weight: bold; font-size: 0.85em; text-decoration: none; display: inline-block; }
+        .login-btn { background-color: #e91429; color: white; padding: 6px 14px; border-radius: 20px; font-weight: bold; font-size: 0.85em; text-decoration: none; display: inline-block; transition: 0.2s; }
+        .login-btn:hover { background-color: #f12c3f; text-decoration: none; }
+        .smart-badge { background-color: #333333; color: #1DB954; padding: 6px 14px; border-radius: 20px; font-weight: bold; font-size: 0.85em; margin-left: 8px; border: 1px solid #1DB954; }
+        
         .track-info { display: flex; align-items: center; gap: 15px; margin-top: 15px; }
         .album-art { width: 80px; height: 80px; border-radius: 6px; object-fit: cover; background-color: #282828; }
         .history-item { display: flex; align-items: center; justify-content: space-between; padding: 10px; border-bottom: 1px solid #282828; }
         .history-item img { width: 40px; height: 40px; border-radius: 4px; }
         a { color: #1DB954; text-decoration: none; }
-        a:hover { text-underline-offset: 3px; text-decoration: underline; }
+        a:hover { text-decoration: underline; }
     </style>
 </head>
 <body>
@@ -25,9 +30,14 @@
             <div class="header">
                 <h2>FreshList AI Monitor</h2>
                 <div>
-                    <span class="status-badge">{{ state.status }}</span>
+                    {% if not state.is_authenticated %}
+                        <a href="/login" class="login-btn">🔐 Action Required: Click Here to Login</a>
+                    {% else %}
+                        <span class="status-badge">{{ state.status }}</span>
+                    {% endif %}
+
                     {% if state.is_smart_shuffle %}
-                        <span class="smart-badge">Smart Shuffle Active</span>
+                        <span class="smart-badge">✨ Smart Shuffle Active</span>
                     {% endif %}
                 </div>
             </div>

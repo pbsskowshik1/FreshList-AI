@@ -72,7 +72,7 @@ def get_auth_manager():
 
 
 def load_playlist_cache(sp, playlist_id):
-    """Loads all existing track IDs into memory using the primary sp.playlist endpoint."""
+    """Loads all existing track IDs into memory with robust pagination and logging."""
     global PLAYLIST_TRACK_CACHE
 
     if PLAYLIST_TRACK_CACHE["playlist_id"] == playlist_id and PLAYLIST_TRACK_CACHE["track_ids"]:
@@ -81,11 +81,28 @@ def load_playlist_cache(sp, playlist_id):
     print(f"[Cache Load] Syncing track list for playlist ID: {playlist_id}")
     track_ids = set()
     try:
-        playlist_data = sp.playlist(playlist_id)
-        tracks_data = playlist_data.get("tracks", {})
-        items = tracks_data.get("items", [])
+        # Use playlist_items without restrictive field parameter filters
+        offset = 0
+        limit = 100
 
-        while items:
+        while True:
+            response = sp.playlist_items(
+                playlist_id,
+                limit=limit,
+                offset=offset,
+                additional_types=['track']
+            )
+
+            if not response or "items" not in response:
+                print(f"[Cache Debug] Unexpected response structure: {response}")
+                break
+
+            items = response.get("items", [])
+            print(f"[Cache Debug] Fetched chunk of {len(items)} items at offset {offset}.")
+
+            if not items:
+                break
+
             for item in items:
                 if not item:
                     continue
@@ -97,9 +114,8 @@ def load_playlist_cache(sp, playlist_id):
                     if tid:
                         track_ids.add(tid)
 
-            if tracks_data.get("next"):
-                tracks_data = sp.next(tracks_data)
-                items = tracks_data.get("items", [])
+            if response.get("next"):
+                offset += limit
             else:
                 break
 

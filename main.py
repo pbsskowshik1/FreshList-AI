@@ -72,7 +72,7 @@ def get_auth_manager():
 
 
 def load_playlist_cache(sp, playlist_id):
-    """Loads all existing track IDs into memory with fallback endpoints and explicit error tracking."""
+    """Loads all existing track IDs into memory with structural inspection."""
     global PLAYLIST_TRACK_CACHE
 
     if PLAYLIST_TRACK_CACHE["playlist_id"] == playlist_id and PLAYLIST_TRACK_CACHE["track_ids"]:
@@ -81,70 +81,54 @@ def load_playlist_cache(sp, playlist_id):
     print(f"[Cache Load] Syncing track list for playlist ID: {playlist_id}")
     track_ids = set()
 
-    # Strategy 1: Try sp.playlist_tracks (Spotipy native alias)
     try:
-        offset = 0
-        limit = 100
-        while True:
-            response = sp.playlist_tracks(playlist_id, limit=limit, offset=offset)
-            if not response or "items" not in response:
-                break
+        playlist_data = sp.playlist(playlist_id)
+        print(f"[Cache Inspector] Playlist keys: {list(playlist_data.keys()) if isinstance(playlist_data, dict) else type(playlist_data)}")
 
-            items = response.get("items", [])
-            if not items:
-                break
+        tracks_obj = playlist_data.get("tracks", {}) if isinstance(playlist_data, dict) else {}
+        print(f"[Cache Inspector] tracks_obj keys: {list(tracks_obj.keys()) if isinstance(tracks_obj, dict) else type(tracks_obj)}")
 
+        items = tracks_obj.get("items", [])
+        print(f"[Cache Inspector] Items count: {len(items)}")
+
+        if items:
+            sample_item = items[0]
+            print(f"[Cache Inspector] Sample item type: {type(sample_item)}")
+            if isinstance(sample_item, dict):
+                print(f"[Cache Inspector] Sample item keys: {list(sample_item.keys())}")
+                if "track" in sample_item:
+                    sample_track = sample_item["track"]
+                    print(f"[Cache Inspector] Sample track value type: {type(sample_track)}")
+                    if isinstance(sample_track, dict):
+                        print(f"[Cache Inspector] Sample track keys: {list(sample_track.keys())}")
+                        print(f"[Cache Inspector] Sample track ID: {sample_track.get('id')}, URI: {sample_track.get('uri')}")
+
+        while items:
             for item in items:
                 if not item or not isinstance(item, dict):
                     continue
 
                 track = item.get("track")
-                if isinstance(track, dict):
-                    tid = track.get("id")
-                    if not tid:
-                        uri = track.get("uri", "")
-                        if uri and "spotify:track:" in uri:
-                            tid = uri.split(":")[-1]
-                    if tid:
-                        track_ids.add(tid)
+                # Handle direct track item vs nested item wrapper
+                target = track if isinstance(track, dict) else item
 
-            if response.get("next"):
-                offset += limit
+                tid = target.get("id")
+                uri = target.get("uri", "")
+
+                if not tid and uri and "spotify:track:" in uri:
+                    tid = uri.split(":")[-1]
+
+                if tid:
+                    track_ids.add(tid)
+
+            if tracks_obj.get("next"):
+                tracks_obj = sp.next(tracks_obj)
+                items = tracks_obj.get("items", []) if isinstance(tracks_obj, dict) else []
             else:
                 break
 
     except Exception as e:
-        print(f"[Cache Load Strategy 1 Error] sp.playlist_tracks failed: {e}")
-
-    # Strategy 2: If Strategy 1 returned 0, fallback to direct sp.playlist object
-    if len(track_ids) == 0:
-        try:
-            print("[Cache Load] Attempting Strategy 2: sp.playlist fallback...")
-            playlist_data = sp.playlist(playlist_id)
-            tracks_obj = playlist_data.get("tracks", {})
-            items = tracks_obj.get("items", [])
-
-            while items:
-                for item in items:
-                    if not item or not isinstance(item, dict):
-                        continue
-                    track = item.get("track")
-                    if isinstance(track, dict):
-                        tid = track.get("id")
-                        if not tid:
-                            uri = track.get("uri", "")
-                            if uri and "spotify:track:" in uri:
-                                tid = uri.split(":")[-1]
-                        if tid:
-                            track_ids.add(tid)
-
-                if tracks_obj.get("next"):
-                    tracks_obj = sp.next(tracks_obj)
-                    items = tracks_obj.get("items", [])
-                else:
-                    break
-        except Exception as e:
-            print(f"[Cache Load Strategy 2 Error] sp.playlist fallback failed: {e}")
+        print(f"[Cache Load Error] {e}")
 
     PLAYLIST_TRACK_CACHE["playlist_id"] = playlist_id
     PLAYLIST_TRACK_CACHE["track_ids"] = track_ids

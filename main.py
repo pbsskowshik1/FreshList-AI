@@ -48,7 +48,7 @@ playback_state = {
     "added_history": []
 }
 
-# In-memory storage for playlist track IDs
+# Persistent in-memory cache for the active playlist's track IDs
 PLAYLIST_TRACK_CACHE = {
     "playlist_id": None,
     "track_ids": set()
@@ -84,7 +84,7 @@ def load_playlist_cache(sp, playlist_id):
         playlist_data = sp.playlist(playlist_id)
         tracks_data = playlist_data.get("tracks", {})
         items = tracks_data.get("items", [])
-        
+
         while items:
             for item in items:
                 if not item:
@@ -112,7 +112,6 @@ def load_playlist_cache(sp, playlist_id):
     return track_ids
 
 
-# --- ADD process_playing_track HERE ---
 def process_playing_track(sp, playlist_id, track_item, playlist_name):
     """Evaluates if the current track should be added as a Smart Shuffle recommendation."""
     global PLAYLIST_TRACK_CACHE
@@ -128,7 +127,7 @@ def process_playing_track(sp, playlist_id, track_item, playlist_name):
     if not track_id:
         return
 
-    # Ensure local cache is populated
+    # Load local cache
     existing_ids = load_playlist_cache(sp, playlist_id)
 
     # 0. Safety Guard: Skip if cache failed to sync tracks
@@ -164,7 +163,7 @@ def process_playing_track(sp, playlist_id, track_item, playlist_name):
     # 4. Add to Playlist and update in-memory cache immediately
     try:
         sp.playlist_add_items(playlist_id=playlist_id, items=[track_uri])
-        
+
         # Add ID directly to local memory so it skips on the next check pass
         PLAYLIST_TRACK_CACHE["track_ids"].add(track_id)
 
@@ -190,6 +189,7 @@ def process_playing_track(sp, playlist_id, track_item, playlist_name):
     except Exception as e:
         print(f"[Add Track Error] {e}")
 
+
 # --- SPOTIFY BACKGROUND WORKER ---
 def spotify_agent_loop():
     global playback_state
@@ -212,7 +212,9 @@ def spotify_agent_loop():
                         continue
 
                     track_uri = track_item.get("uri", "")
-                    track_id = track_item.get("id") or (track_uri.split(":")[-1] if track_uri.startswith("spotify:track:") else None)
+                    track_id = track_item.get("id") or (
+                        track_uri.split(":")[-1] if track_uri.startswith("spotify:track:") else None
+                    )
 
                     images = track_item.get("album", {}).get("images", [])
                     image_url = images[0]["url"] if images else None
@@ -228,7 +230,7 @@ def spotify_agent_loop():
                         playlist_id = playlist_uri.split(":")[-1]
                         playback_state["active_playlist_id"] = playlist_id
 
-                        # Only process evaluation when track ID changes
+                        # Process when a new track plays
                         if track_id and track_id != last_processed_track_id:
                             playlist_info = sp.playlist(playlist_id, fields="name")
                             playlist_name = playlist_info.get("name", "Active Playlist")

@@ -72,7 +72,7 @@ def get_auth_manager():
 
 
 def load_playlist_cache(sp, playlist_id):
-    """Loads all existing track IDs into memory with robust pagination and logging."""
+    """Loads all existing track IDs into memory with robust item extraction."""
     global PLAYLIST_TRACK_CACHE
 
     if PLAYLIST_TRACK_CACHE["playlist_id"] == playlist_id and PLAYLIST_TRACK_CACHE["track_ids"]:
@@ -81,36 +81,40 @@ def load_playlist_cache(sp, playlist_id):
     print(f"[Cache Load] Syncing track list for playlist ID: {playlist_id}")
     track_ids = set()
     try:
-        # Use playlist_items without restrictive field parameter filters
         offset = 0
         limit = 100
 
         while True:
-            response = sp.playlist_items(
-                playlist_id,
-                limit=limit,
-                offset=offset,
-                additional_types=['track']
-            )
+            # Omit additional_types to prevent Spotipy API response structural mutations
+            response = sp.playlist_items(playlist_id, limit=limit, offset=offset)
 
             if not response or "items" not in response:
                 print(f"[Cache Debug] Unexpected response structure: {response}")
                 break
 
             items = response.get("items", [])
-            print(f"[Cache Debug] Fetched chunk of {len(items)} items at offset {offset}.")
-
             if not items:
                 break
 
             for item in items:
-                if not item:
+                if not item or not isinstance(item, dict):
                     continue
+                
+                # Check under standard 'track' dictionary wrapper
                 t = item.get("track")
-                if t:
+                
+                # Fallback if 'track' is None or item is flattened
+                if not t:
+                    t = item
+
+                if isinstance(t, dict):
                     tid = t.get("id")
-                    if not tid and t.get("uri") and t["uri"].startswith("spotify:track:"):
-                        tid = t["uri"].split(":")[-1]
+                    uri = t.get("uri", "")
+
+                    # Extract ID from URI if 'id' field is null
+                    if not tid and uri and uri.startswith("spotify:track:"):
+                        tid = uri.split(":")[-1]
+
                     if tid:
                         track_ids.add(tid)
 

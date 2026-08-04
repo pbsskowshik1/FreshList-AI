@@ -12,12 +12,11 @@ import uvicorn
 # --- CONFIGURATION ---
 CLIENT_ID = os.environ.get("SPOTIPY_CLIENT_ID", "YOUR_CLIENT_ID")
 CLIENT_SECRET = os.environ.get("SPOTIPY_CLIENT_SECRET", "YOUR_CLIENT_SECRET")
-REDIRECT_URI = os.environ.get("SPOTIPY_REDIRECT_URI", "https://freshlist-ai.onrender.com")
+REDIRECT_URI = os.environ.get("SPOTIPY_REDIRECT_URI", "http://127.0.0.1:8080/callback")
 
 ENABLE_ARCHIVE_BACKUP = os.environ.get("ENABLE_ARCHIVE_BACKUP", "true").lower() == "true"
 ARCHIVE_PLAYLIST_NAME = "FreshList Archive"
-MAX_TRACK_AGE_YEARS = 3
-MIN_POPULARITY_SCORE = 20
+MIN_POPULARITY_SCORE = 10
 
 SCOPES = (
     "user-read-playback-state "
@@ -49,6 +48,12 @@ playback_state = {
     "added_history": []
 }
 
+# Local cache for current playlist track URIs
+playlist_cache = {
+    "playlist_id": None,
+    "uris": set()
+}
+
 
 def get_auth_manager():
     cache_data = os.environ.get("SPOTIPY_CACHE")
@@ -66,39 +71,49 @@ def get_auth_manager():
     )
 
 
-def get_playlist_track_uris(sp, playlist_id):
-    """Fetches all track URIs currently inside the active playlist."""
-    track_uris = set()
+def fetch_playlist_track_uris(sp, playlist_id):
+    """Fetches all track URIs in a playlist."""
+    uris = set()
     try:
         results = sp.playlist_items(playlist_id, fields="items(track(uri)),next")
         while results:
             for item in results.get("items", []):
                 t = item.get("track")
                 if t and t.get("uri"):
-                    track_uris.add(t["uri"])
+                    uris.add(t["uri"])
             if results.get("next"):
                 results = sp.next(results)
             else:
                 break
     except Exception as e:
         print(f"[Playlist Fetch Error] {e}")
-    return track_uris
+    return uris
 
 
-def handle_smart_shuffle_track(sp, playlist_id, track_item, playlist_name):
-    """Appends Smart Shuffle track ONLY if it's genuinely missing from the playlist."""
+def handle_track_evaluation(sp, playlist_id, track_item, playlist_name):
+    """Appends track if it's a new recommendation not originally in the playlist."""
+    global playlist_cache
+
     track_id = track_item.get("id")
     track_uri = track_item["uri"]
     track_name = track_item["name"]
     artist_name = track_item["artists"][0]["name"]
 
-    # 1. Check if track is already in playlist
-    existing_uris = get_playlist_track_uris(sp, playlist_id)
-    if track_uri in existing_uris:
-        print(f"[Smart Shuffle Skip] Track '{track_name}' is already in playlist '{playlist_name}'.")
+    # Refresh playlist cache if playlist changed or empty
+    if playlist_cache["playlist_id"] != playlist_id:
+        playlist_cache["playlist_id"] = playlist_id
+        playlist_cache["uris"] = fetch_playlist_track_uris(sp, playlist_id)
+
+    # 1. Skip if track was already part of the playlist
+    if track_uri in playlist_cache["uris"]:
+        print(f"[Skip] Track '{track_name}' is already in playlist '{playlist_name}'.")
+        playback_state["is_smart_shuffle"] = False
         return
 
-    # 2. Check real popularity
+    # 2. Track is NOT in playlist -> treat as Smart Shuffle recommendation
+    playback_state["is_smart_shuffle"] = True
+
+    # 3. Verify popularity
     popularity = track_item.get("popularity", 0)
     if popularity == 0 and track_id:
         try:
@@ -108,12 +123,15 @@ def handle_smart_shuffle_track(sp, playlist_id, track_item, playlist_name):
             pass
 
     if popularity < MIN_POPULARITY_SCORE:
-        print(f"[Smart Shuffle Skip] Track '{track_name}' popularity ({popularity}) below threshold ({MIN_POPULARITY_SCORE}).")
+        print(f"[Skip] Track '{track_name}' popularity ({popularity}) below threshold ({MIN_POPULARITY_SCORE}).")
         return
 
-    # 3. Add genuine new Smart Shuffle track to playlist
+    # 4. Add the recommendation to the playlist
     try:
         sp.playlist_add_items(playlist_id=playlist_id, items=[track_uri])
+        # Update cache so it isn't added again in this session
+        playlist_cache["uris"].add(track_uri)
+
         print(f"🎉 [Smart Shuffle SUCCESS] Added '{track_name}' by {artist_name} to '{playlist_name}'!")
 
         timestamp = time.strftime("%H:%M:%S")
@@ -167,15 +185,6 @@ def spotify_agent_loop():
                     playback_state["image_url"] = image_url
                     playback_state["status"] = "Playing"
 
-                    # Strict Smart Shuffle Detection Logic
-                    shuffle_state = current.get("shuffle_state", False)
-                    smart_shuffle = (
-                        current.get("smart_shuffle", False) or 
-                        current.get("is_smart_shuffle", False) or 
-                        (shuffle_state and "recommendation" in str(current).lower())
-                    )
-                    playback_state["is_smart_shuffle"] = smart_shuffle
-
                     context = current.get("context")
                     if context and context.get("type") == "playlist":
                         playlist_uri = context.get("uri")
@@ -187,14 +196,14 @@ def spotify_agent_loop():
                             playlist_name = playlist_info.get("name", "Active Playlist")
                             playback_state["current_playlist"] = playlist_name
 
-                            # ONLY run insertion if Smart Shuffle is actively detected AND not the Archive playlist
-                            if smart_shuffle and playlist_name.lower() != ARCHIVE_PLAYLIST_NAME.lower():
-                                handle_smart_shuffle_track(sp, playlist_id, track_item, playlist_name)
+                            if playlist_name.lower() != ARCHIVE_PLAYLIST_NAME.lower():
+                                handle_track_evaluation(sp, playlist_id, track_item, playlist_name)
 
                             last_processed_track_uri = track_uri
                     else:
                         playback_state["current_playlist"] = "Not playing from a playlist"
                         playback_state["active_playlist_id"] = None
+                        playback_state["is_smart_shuffle"] = False
 
                 else:
                     playback_state["track"] = "No track playing"
@@ -203,6 +212,7 @@ def spotify_agent_loop():
                     playback_state["current_playlist"] = "None"
                     playback_state["active_playlist_id"] = None
                     playback_state["status"] = "Idle"
+                    playback_state["is_smart_shuffle"] = False
             else:
                 playback_state["is_authenticated"] = False
                 playback_state["status"] = "Action Required: Login Needed"

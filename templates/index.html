@@ -26,7 +26,7 @@
         </div>
         {% else %}
         <!-- Active Track Display -->
-        <div class="bg-slate-900/50 p-4 rounded-xl border border-slate-700/50 flex items-center space-x-4">
+        <div class="bg-slate-900/50 p-4 rounded-xl border border-slate-700/50 flex items-center space-x-4 mb-4">
             {% if state.image_url %}
             <img src="{{ state.image_url }}" alt="Album Art" class="w-16 h-16 rounded-lg object-cover shadow-md border border-slate-700">
             {% else %}
@@ -39,8 +39,15 @@
             </div>
         </div>
 
+        <!-- Scan Full Playlist Action -->
+        {% if state.active_playlist_id %}
+        <button onclick="triggerFullScan()" class="w-full bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 font-bold py-2.5 px-4 rounded-xl border border-emerald-500/30 transition text-xs mb-6 flex items-center justify-center space-x-2">
+            <span>⚡ Scan & Clean Entire Playlist (>3 Yrs Old)</span>
+        </button>
+        {% endif %}
+
         <!-- Removal Log Section -->
-        <div class="mt-6">
+        <div>
             <div class="flex items-center justify-between mb-3">
                 <h2 class="text-xs uppercase tracking-wider text-slate-400 font-semibold">Removed Tracks Log</h2>
                 <span class="text-xs text-emerald-400 font-bold">{{ state.removed_count }} removed</span>
@@ -57,7 +64,10 @@
                     {% endif %}
                     <div class="flex-1 truncate">
                         <p class="font-bold text-slate-200 truncate">{{ item.track }}</p>
-                        <p class="text-slate-400 text-[11px] truncate">{{ item.artist }} • <span class="text-emerald-400">{{ item.playlist }}</span></p>
+                        <p class="text-slate-400 text-[11px] truncate">{{ item.artist }}</p>
+                        {% if item.replacement != "None" %}
+                        <p class="text-[10px] text-emerald-400/80 truncate">➕ Added: {{ item.replacement }}</p>
+                        {% endif %}
                     </div>
                     <span class="text-slate-500 text-[10px] flex-shrink-0">{{ item.time }}</span>
                 </a>
@@ -73,5 +83,13 @@
         <p class="text-[10px] text-center text-slate-500 mt-6">Auto-refreshes every 10 seconds</p>
         {% endif %}
     </div>
+
+    <script>
+        function triggerFullScan() {
+            fetch('/scan-full-playlist', { method: 'POST' })
+                .then(res => res.json())
+                .then(data => alert(data.message));
+        }
+    </script>
 </body>
 </html>
